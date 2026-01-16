@@ -1,19 +1,16 @@
 import streamlit as st
-import streamlit.components.v1 as components  # 자바스크립트 사용을 위한 컴포넌트
+import streamlit.components.v1 as components
 import pandas as pd
 import datetime
 import json
 import os
 
-# --- 1. 데이터 관리 (JSON 파일 저장/로드) ---
+# --- 1. 데이터 관리 ---
 DATA_FILE = "study_planner_data.json"
 
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {
-            "schedules": [],
-            "logs": []
-        }
+        return {"schedules": [], "logs": []}
     with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -23,9 +20,16 @@ def save_data(data):
 
 data = load_data()
 
-# --- 2. 유틸리티 함수 ---
+# --- [중요] 한국 시간 구하는 함수 (서버 시간 + 9시간) ---
+def get_korea_now():
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
+
+def get_korea_today():
+    return get_korea_now().date()
+
+# --- 2. 일정 필터링 함수 (한국 시간 기준 수정됨) ---
 def get_today_schedules(schedules):
-    today = datetime.date.today()
+    today = get_korea_today()  # [변경] 한국 날짜 사용
     weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
     today_weekday = weekday_map[today.weekday()] 
     today_str = today.strftime("%Y-%m-%d")
@@ -49,29 +53,22 @@ def get_today_schedules(schedules):
     todays_list.sort(key=lambda x: x['time'])
     return todays_list
 
-# [추가됨] 자바스크립트 실시간 시계 함수
+# 자바스크립트 시계
 def show_realtime_clock():
     clock_html = """
     <style>
         .clock-container {
             font-family: 'Source Sans Pro', sans-serif;
             text-align: center;
-            padding: 10px;
-            background-color: #f0f2f6;
-            border-radius: 10px;
-            border: 1px solid #dcdcdc;
+            padding: 15px;
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
             color: #31333F;
+            margin-bottom: 20px;
         }
-        .time-text {
-            font-size: 2em;
-            font-weight: bold;
-            margin: 0;
-        }
-        .date-text {
-            font-size: 1em;
-            color: #666;
-            margin: 0;
-        }
+        .time-text { font-size: 2.2em; font-weight: 700; margin: 0; color: #ff4b4b; }
+        .date-text { font-size: 1.1em; color: #555; margin-bottom: 5px; }
     </style>
     <div class="clock-container">
         <div id="date" class="date-text"></div>
@@ -80,201 +77,168 @@ def show_realtime_clock():
     <script>
         function updateClock() {
             var now = new Date();
-            var timeString = now.toLocaleTimeString('ko-KR', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            var timeString = now.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
             var dateString = now.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
-            
             document.getElementById('clock').innerHTML = timeString;
             document.getElementById('date').innerHTML = dateString;
         }
-        setInterval(updateClock, 1000); // 1초마다 갱신
-        updateClock(); // 즉시 실행
+        setInterval(updateClock, 1000);
+        updateClock();
     </script>
     """
-    # HTML을 렌더링 (높이는 적절히 조절)
-    components.html(clock_html, height=110)
+    components.html(clock_html, height=130)
 
-# --- 3. UI 레이아웃 및 페이지 설정 ---
+# --- 3. 메인 화면 구성 ---
 st.set_page_config(page_title="나만의 스터디 플래너", layout="wide", page_icon="📝")
 
 st.sidebar.title("📚 메뉴")
 page = st.sidebar.radio("이동", ["대시보드 (Main)", "공부 기록하기", "일정 관리"])
 
-# --- 페이지 1: 대시보드 (Main) ---
+# 공통: 한국 시간 가져오기
+korea_now = get_korea_now()
+korea_today_str = korea_now.strftime("%Y-%m-%d")
+
 if page == "대시보드 (Main)":
-    st.title("🏠 대시보드")
-    
-    # [추가됨] 상단에 실시간 시계 배치
+    # 상단 시계 표시
     show_realtime_clock()
     
-    st.markdown("---")
-
-    # 통계 데이터 계산
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    today_logs = [log for log in data['logs'] if log['date'] == today_str]
+    # 데이터 계산
+    today_logs = [log for log in data['logs'] if log['date'] == korea_today_str]
     total_minutes = sum(log['duration'] for log in today_logs)
     today_schedules = get_today_schedules(data['schedules'])
     
-    col1, col2 = st.columns(2)
-    col1.metric("⏱️ 오늘 공부량", f"{total_minutes} 분")
-    col2.metric("🔔 남은 일정", f"{len(today_schedules)} 개")
-
+    # 요약 지표 (Metrics)
+    c1, c2 = st.columns(2)
+    c1.metric("⏱️ 오늘 공부량", f"{total_minutes} 분")
+    c2.metric("🔔 남은 일정", f"{len(today_schedules)} 개")
+    
     st.markdown("---")
+    
+    # 일정 & 기록 보여주기
+    col_left, col_right = st.columns([1, 1])
+    
+    weekday_korean = ["월", "화", "수", "목", "금", "토", "일"][korea_now.weekday()]
 
-    c1, c2 = st.columns([1, 1])
-
-    with c1:
-        st.subheader("📝 오늘의 일정")
+    with col_left:
+        st.subheader(f"📝 오늘의 일정 ({weekday_korean})")
         if today_schedules:
             for item in today_schedules:
                 with st.container(border=True):
-                    display_val = item['value']
-                    if isinstance(display_val, list):
-                        display_val = ",".join(display_val)
-                    elif display_val is None:
-                        display_val = "All"
-                        
-                    st.markdown(f"### ⏰ {item['time']}") 
+                    val_disp = ",".join(item['value']) if isinstance(item['value'], list) else str(item['value'])
+                    st.markdown(f"#### ⏰ {item['time']}") 
                     st.markdown(f"**{item['title']}**")
-                    st.caption(f"조건: {item['type']} ({display_val})")
+                    st.caption(f"조건: {item['type']} ({val_disp})")
         else:
-            st.info("오늘 예정된 일정이 없습니다.")
+            st.info(f"오늘은 예정된 일정이 없습니다! ({weekday_korean}요일)")
 
-    with c2:
+    with col_right:
         st.subheader("🔥 최근 공부 기록")
         if data['logs']:
+            # 날짜 내림차순 정렬
             df_logs = pd.DataFrame(data['logs']).sort_values(by=["date", "time"], ascending=False).head(5)
             st.dataframe(
                 df_logs[["date", "time", "subject", "duration", "note"]],
-                column_config={
-                    "date": "날짜", "time": "시간", "subject": "과목", "duration": "분", "note": "내용"
-                },
+                column_config={"date":"날짜", "time":"시간", "subject":"과목", "duration":"분", "note":"내용"},
                 use_container_width=True, hide_index=True
             )
         else:
             st.warning("아직 공부 기록이 없습니다.")
 
-# --- 페이지 2: 공부 기록하기 ---
 elif page == "공부 기록하기":
     st.title("✍️ 공부 기록")
-    st.info("공부한 날짜와 시간을 직접 지정하여 기록할 수 있습니다.")
+    st.info(f"현재 한국 시간: {korea_now.strftime('%Y-%m-%d %H:%M')}")
     
     with st.form("log_form"):
-        col_date, col_time = st.columns(2)
-        input_date = col_date.date_input("공부한 날짜", datetime.date.today())
-        # 현재 시간 자동 세팅
-        input_time = col_time.time_input("시작 시간", datetime.datetime.now().time())
+        col_d, col_t = st.columns(2)
+        # 기본값을 한국 시간으로 설정
+        input_date = col_d.date_input("날짜", get_korea_today())
+        input_time = col_t.time_input("시간", korea_now.time())
         
         c1, c2 = st.columns(2)
-        subject = c1.text_input("과목명", placeholder="예: 수학, 코딩")
-        duration = c2.number_input("공부 시간(분)", min_value=1, step=10, value=60)
+        subject = c1.text_input("과목명")
+        duration = c2.number_input("공부 시간(분)", value=60, step=10)
+        note = st.text_area("메모")
         
-        note = st.text_area("학습 내용 메모")
-        
-        if st.form_submit_button("기록 저장"):
+        if st.form_submit_button("저장"):
             new_log = {
                 "date": input_date.strftime("%Y-%m-%d"),
                 "time": input_time.strftime("%H:%M"),
                 "subject": subject,
                 "duration": duration,
                 "note": note,
-                "timestamp": str(datetime.datetime.now())
+                "timestamp": str(korea_now) # 정렬용 타임스탬프
             }
             data['logs'].append(new_log)
             save_data(data)
             st.success("저장 완료!")
             st.rerun()
-
+            
     st.divider()
     st.subheader("📜 전체 기록")
-    
     if data['logs']:
         df_all = pd.DataFrame(data['logs']).sort_values(by=["date", "time"], ascending=False)
-        st.dataframe(
-            df_all[["date", "time", "subject", "duration", "note"]],
-            column_config={
-                "date": "날짜", "time": "시간", "subject": "과목", "duration": "시간(분)", "note": "메모"
-            },
-            use_container_width=True, hide_index=True
-        )
-
-        with st.expander("기록 삭제하기"):
-            log_to_delete = st.selectbox(
-                "삭제할 기록 선택", 
-                df_all.index, 
-                format_func=lambda x: f"[{df_all.loc[x]['date']} {df_all.loc[x]['time']}] {df_all.loc[x]['subject']}"
-            )
-            if st.button("선택한 기록 삭제"):
-                log_item = df_all.loc[log_to_delete].to_dict()
-                data['logs'] = [x for x in data['logs'] if x['timestamp'] != log_item['timestamp']]
+        st.dataframe(df_all[["date", "time", "subject", "duration", "note"]], use_container_width=True, hide_index=True)
+        
+        with st.expander("기록 삭제"):
+            target = st.selectbox("삭제할 항목", df_all.index, format_func=lambda i: f"[{df_all.loc[i]['date']}] {df_all.loc[i]['subject']}")
+            if st.button("삭제"):
+                # timestamp로 찾아서 삭제
+                tgt_ts = df_all.loc[target]['timestamp']
+                data['logs'] = [x for x in data['logs'] if x['timestamp'] != tgt_ts]
                 save_data(data)
                 st.rerun()
 
-# --- 페이지 3: 일정 관리 ---
 elif page == "일정 관리":
-    st.title("🗓️ 일정 설정")
+    st.title("🗓️ 일정 관리")
     
-    st.subheader("새 일정 추가")
-    with st.form("schedule_form"):
-        title = st.text_input("일정 내용", placeholder="예: 영어 단어 암기")
-        t_time = st.time_input("일정 시간 설정", datetime.time(9, 0))
+    with st.form("new_schedule"):
+        st.subheader("새 일정 추가")
+        title = st.text_input("내용 (예: 수학학원)")
+        t_time = st.time_input("시간", datetime.time(9,0))
+        type_opt = st.selectbox("반복", ["매일", "매주 요일", "특정 날짜"])
         
-        s_type = st.selectbox("반복 유형", ["매일", "매주 요일", "특정 날짜"])
-        
-        s_value = None
-        if s_type == "매주 요일":
-            s_value = st.multiselect("요일 선택", ["월", "화", "수", "목", "금", "토", "일"])
-        elif s_type == "특정 날짜":
-            d = st.date_input("날짜 선택")
-            s_value = d.strftime("%Y-%m-%d")
+        val = None
+        if type_opt == "매주 요일":
+            val = st.multiselect("요일", ["월", "화", "수", "목", "금", "토", "일"])
+        elif type_opt == "특정 날짜":
+            d = st.date_input("날짜")
+            val = d.strftime("%Y-%m-%d")
             
-        if st.form_submit_button("추가하기"):
+        if st.form_submit_button("추가"):
             if not title:
-                st.error("내용을 입력하세요.")
-            elif s_type == "매주 요일" and not s_value:
-                st.error("요일을 선택하세요.")
+                st.error("내용을 입력하세요")
             else:
-                new_id = (max([x['id'] for x in data['schedules']]) + 1) if data['schedules'] else 1
                 new_item = {
-                    "id": new_id,
+                    "id": (max(x['id'] for x in data['schedules']) + 1) if data['schedules'] else 1,
                     "title": title,
                     "time": t_time.strftime("%H:%M"),
-                    "type": s_type,
-                    "value": s_value
+                    "type": type_opt,
+                    "value": val
                 }
                 data['schedules'].append(new_item)
                 save_data(data)
-                st.success("추가되었습니다.")
+                st.success("추가됨")
                 st.rerun()
-
+    
     st.divider()
-
-    st.subheader("일정 목록 관리")
     if data['schedules']:
-        df_sche = pd.DataFrame(data['schedules'])
-        def fmt(val):
-            if isinstance(val, list): return ", ".join(val)
-            return val
-        df_view = df_sche.copy()
-        df_view['value_display'] = df_view['value'].apply(fmt)
-        df_view['delete'] = False
+        st.subheader("일정 목록")
+        df_sc = pd.DataFrame(data['schedules'])
+        df_sc['disp'] = df_sc['value'].apply(lambda x: ",".join(x) if isinstance(x, list) else x)
+        df_sc['del'] = False
         
         edited = st.data_editor(
-            df_view,
+            df_sc,
             column_config={
-                "delete": st.column_config.CheckboxColumn("삭제", default=False),
-                "time": st.column_config.TextColumn("시간"),
-                "title": "내용", "type": "유형", "value_display": "상세정보",
+                "del": st.column_config.CheckboxColumn("삭제", default=False),
+                "title": "내용", "time":"시간", "type":"반복", "disp":"상세",
                 "value": None, "id": None
             },
             hide_index=True, use_container_width=True
         )
-        
-        if st.button("선택한 일정 삭제"):
-            del_ids = edited[edited['delete']]['id'].tolist()
+        if st.button("선택 삭제"):
+            del_ids = edited[edited['del']]['id'].tolist()
             if del_ids:
-                data['schedules'] = [s for s in data['schedules'] if s['id'] not in del_ids]
+                data['schedules'] = [x for x in data['schedules'] if x['id'] not in del_ids]
                 save_data(data)
-                st.success("삭제 완료!")
                 st.rerun()
-    else:
-        st.write("등록된 일정이 없습니다.")
