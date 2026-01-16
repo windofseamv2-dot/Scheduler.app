@@ -5,7 +5,7 @@ import datetime
 import json
 import os
 
-# --- 1. 기본 설정 및 데이터 관리 ---
+# --- 1. 기본 설정 ---
 st.set_page_config(page_title="나만의 스터디 플래너", layout="wide", page_icon="📝")
 
 DATA_FILE = "study_planner_data.json"
@@ -24,145 +24,132 @@ data = load_data()
 
 # --- 한국 시간 함수 ---
 def get_korea_now():
+    # 서버 시간(UTC) + 9시간 = 한국 시간(KST)
     return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
 def get_korea_today():
     return get_korea_now().date()
 
-# --- 2. 일정 필터링 함수 (기간 로직 추가됨) ---
-def get_upcoming_schedules(schedules):
+# --- 2. 일정 필터링 및 처리 함수 ---
+def process_schedules(schedules):
+    # 이 함수는 "오늘 해당하는 일정"을 모두 골라내고, 시간 형식을 "HH:MM:SS"로 통일합니다.
     now = get_korea_now()
     today_date = now.date()
-    current_time_str = now.strftime("%H:%M:%S")
-    
+    today_str = today_date.strftime("%Y-%m-%d")
     weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
     today_weekday = weekday_map[today_date.weekday()] 
-    today_str = today_date.strftime("%Y-%m-%d")
     
-    upcoming_list = []
+    todays_list = []
     
     for sc in schedules:
         is_today = False
-        
-        # [1] 반복 유형 체크
+        # 1. 날짜/요일 체크
         if sc['type'] == '매일':
             is_today = True
-            
-        elif sc['type'] == '매주 요일':
-            if isinstance(sc['value'], list) and today_weekday in sc['value']:
-                is_today = True
-            elif isinstance(sc['value'], str) and sc['value'] == today_weekday:
-                is_today = True
-                
-        elif sc['type'] == '특정 날짜' and sc['value'] == today_str:
-            is_today = True
-            
-        # [추가됨] 기간 (Start ~ End) 로직
-        elif sc['type'] == '기간 (Start ~ End)':
-            # value가 [시작일, 종료일] 형태여야 함
-            if isinstance(sc['value'], list) and len(sc['value']) == 2:
-                try:
-                    start_date = datetime.datetime.strptime(sc['value'][0], "%Y-%m-%d").date()
-                    end_date = datetime.datetime.strptime(sc['value'][1], "%Y-%m-%d").date()
-                    # 오늘이 시작일과 종료일 사이에 있으면 True
-                    if start_date <= today_date <= end_date:
-                        is_today = True
-                except:
-                    pass # 날짜 형식이 꼬였을 경우 무시
-
-        # [2] 시간 포맷 통일
-        if len(sc['time']) == 5: 
-            sc['time'] += ":00"
-
-        # [3] 시간이 안 지난 것만 담기
-        if is_today and sc['time'] > current_time_str:
-            upcoming_list.append(sc)
-    
-    upcoming_list.sort(key=lambda x: x['time'])
-    return upcoming_list
-
-# 알림용 전체 일정 (기간 로직 추가됨)
-def get_today_all_schedules_for_alert(schedules):
-    today_date = get_korea_today()
-    weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
-    today_weekday = weekday_map[today_date.weekday()] 
-    today_str = today_date.strftime("%Y-%m-%d")
-    
-    alert_list = []
-    for sc in schedules:
-        is_today = False
-        if sc['type'] == '매일': is_today = True
         elif sc['type'] == '매주 요일':
             if isinstance(sc['value'], list) and today_weekday in sc['value']: is_today = True
             elif isinstance(sc['value'], str) and sc['value'] == today_weekday: is_today = True
-        elif sc['type'] == '특정 날짜' and sc['value'] == today_str: is_today = True
-        
-        # [추가됨] 기간 로직
+        elif sc['type'] == '특정 날짜' and sc['value'] == today_str:
+            is_today = True
         elif sc['type'] == '기간 (Start ~ End)':
             if isinstance(sc['value'], list) and len(sc['value']) == 2:
                 try:
-                    start_date = datetime.datetime.strptime(sc['value'][0], "%Y-%m-%d").date()
-                    end_date = datetime.datetime.strptime(sc['value'][1], "%Y-%m-%d").date()
-                    if start_date <= today_date <= end_date:
-                        is_today = True
+                    s_d = datetime.datetime.strptime(sc['value'][0], "%Y-%m-%d").date()
+                    e_d = datetime.datetime.strptime(sc['value'][1], "%Y-%m-%d").date()
+                    if s_d <= today_date <= e_d: is_today = True
                 except: pass
-        
-        if len(sc['time']) == 5: sc['time'] += ":00"
-        
-        if is_today:
-            alert_list.append(sc)
-    return alert_list
 
-# --- 3. 알림 시계 ---
+        # 2. 시간 포맷 강제 통일 (무조건 HH:MM:SS 두 자리 숫자)
+        # 예: "9:0:0" -> "09:00:00", "09:30" -> "09:30:00"
+        try:
+            parts = sc['time'].split(':')
+            if len(parts) == 2: # HH:MM
+                h, m = int(parts[0]), int(parts[1])
+                s = 0
+            elif len(parts) == 3: # HH:MM:SS
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+            else:
+                continue # 이상한 형식은 무시
+            
+            # 포맷팅 적용
+            formatted_time = f"{h:02d}:{m:02d}:{s:02d}"
+            sc['time'] = formatted_time # 데이터 업데이트
+            
+        except:
+            continue
+
+        if is_today:
+            todays_list.append(sc)
+            
+    todays_list.sort(key=lambda x: x['time'])
+    return todays_list
+
+# --- 3. [핵심] 알림 기능 시계 ---
 def show_realtime_clock_with_alert(today_schedules):
+    # 오늘 울려야 할 알림들의 시간을 추출해서 JS로 보냄
+    # 디버깅을 위해 화면에도 표시해줌
     schedules_json = json.dumps(today_schedules, ensure_ascii=False)
+    
+    # 다음 알림 미리보기 텍스트 생성
+    alert_times_debug = [f"[{item['title']} {item['time']}]" for item in today_schedules]
+    debug_text = " / ".join(alert_times_debug) if alert_times_debug else "없음"
+
     clock_html = f"""
     <style>
-        .clock-container {{
-            font-family: 'Source Sans Pro', sans-serif;
+        .clock-wrapper {{
             text-align: center;
             padding: 15px;
-            background-color: #ffffff;
+            background-color: white;
             border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            color: #31333F;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
             margin-bottom: 20px;
+            border: 1px solid #eee;
         }}
-        .time-text {{ font-size: 2.2em; font-weight: 700; margin: 0; color: #ff4b4b; }}
-        .date-text {{ font-size: 1.1em; color: #555; margin-bottom: 5px; }}
+        .time {{ font-size: 2.5em; font-weight: 800; color: #FF4B4B; margin: 0; line-height: 1.2; }}
+        .date {{ font-size: 1.1em; color: #666; margin-bottom: 5px; }}
+        .debug {{ font-size: 0.8em; color: #aaa; margin-top: 10px; }}
     </style>
-    <div class="clock-container">
-        <div id="date" class="date-text"></div>
-        <div id="clock" class="time-text">Loading...</div>
+    <div class="clock-wrapper">
+        <div id="date" class="date"></div>
+        <div id="clock" class="time">--:--:--</div>
+        <div class="debug">🔔 알림 대기중인 일정: {debug_text}</div>
     </div>
     <script>
         var schedules = {schedules_json};
-        var alertedTimes = []; 
+        var alertedTimes = []; // 이미 알림 보낸 시간 저장
+
         function updateClock() {{
             var now = new Date();
+            // 1. 한국 시간 계산 (브라우저 시간 대신 서버시간을 따라가진 못하지만, 포맷은 맞춤)
+            // 시간 포맷을 HH:MM:SS (09:05:01) 형태로 강제 변환
             var h = String(now.getHours()).padStart(2, '0');
             var m = String(now.getMinutes()).padStart(2, '0');
             var s = String(now.getSeconds()).padStart(2, '0');
             var timeString = h + ":" + m + ":" + s;
+            
+            // 날짜 표시
             var dateString = now.toLocaleDateString('ko-KR', {{ year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }});
             
             document.getElementById('clock').innerHTML = timeString;
             document.getElementById('date').innerHTML = dateString;
 
+            // 2. 알림 체크 (초 단위 일치 확인)
             schedules.forEach(function(item) {{
+                // 파이썬에서 보내준 item.time은 무조건 "HH:MM:SS" 형태임
                 if (item.time === timeString && !alertedTimes.includes(timeString)) {{
-                    alert("⏰ 시간 됐어요!\\n[" + item.title + "] 할 시간입니다!");
+                    // 알림창 띄우기
+                    alert("⏰ 딩동! [" + item.title + "] 할 시간입니다!");
                     alertedTimes.push(timeString);
                 }}
             }});
         }}
-        setInterval(updateClock, 1000);
-        updateClock();
+        setInterval(updateClock, 1000); // 1초마다 실행
+        updateClock(); // 즉시 실행
     </script>
     """
-    components.html(clock_html, height=130)
+    components.html(clock_html, height=180)
 
-# --- 4. 메인 화면 ---
+# --- 4. 메인 화면 구성 ---
 st.sidebar.title("📚 메뉴")
 page = st.sidebar.radio("이동", ["대시보드 (Main)", "공부 기록하기", "일정 관리"])
 
@@ -170,10 +157,15 @@ korea_now = get_korea_now()
 korea_today_str = korea_now.strftime("%Y-%m-%d")
 
 if page == "대시보드 (Main)":
-    alert_schedules = get_today_all_schedules_for_alert(data['schedules'])
-    show_realtime_clock_with_alert(alert_schedules)
+    # 1. 오늘 해당하는 모든 일정 가져오기 (알림용)
+    today_all_schedules = process_schedules(data['schedules'])
     
-    upcoming_schedules = get_upcoming_schedules(data['schedules'])
+    # 2. 시계 표시 (알림 기능 포함)
+    show_realtime_clock_with_alert(today_all_schedules)
+    
+    # 3. 화면에 보여줄 일정 (시간 지난 건 숨기기)
+    current_time_str = korea_now.strftime("%H:%M:%S")
+    upcoming_schedules = [s for s in today_all_schedules if s['time'] > current_time_str]
     
     today_logs = [log for log in data['logs'] if log['date'] == korea_today_str]
     total_minutes = sum(log['duration'] for log in today_logs)
@@ -192,16 +184,28 @@ if page == "대시보드 (Main)":
         if upcoming_schedules:
             for item in upcoming_schedules:
                 with st.container(border=True):
-                    # 값 표시 예쁘게 (기간인 경우 ~ 표시)
+                    # [요청사항 반영] 상세 정보 표시 로직
+                    t_type = item['type']
                     val = item['value']
-                    if item['type'] == '기간 (Start ~ End)' and isinstance(val, list):
-                        val_disp = f"{val[0]} ~ {val[1]}"
-                    else:
-                        val_disp = ",".join(val) if isinstance(val, list) else str(val)
-                        
-                    st.markdown(f"#### ⏰ {item['time']}") 
-                    st.markdown(f"**{item['title']}**")
-                    st.caption(f"조건: {item['type']} ({val_disp})")
+                    desc = ""
+                    
+                    if t_type == "매일":
+                        desc = "매일 반복"
+                    elif t_type == "매주 요일":
+                        weekdays = ",".join(val) if isinstance(val, list) else str(val)
+                        desc = f"매주 {weekdays}요일"
+                    elif t_type == "특정 날짜":
+                        desc = f"날짜: {val}"
+                    elif t_type == "기간 (Start ~ End)":
+                        if isinstance(val, list) and len(val) == 2:
+                            desc = f"기간: {val[0]} ~ {val[1]}"
+                        else:
+                            desc = "기간 설정 오류"
+
+                    # 카드 디자인
+                    st.markdown(f"### ⏰ {item['time']}") 
+                    st.markdown(f"**📌 {item['title']}**") # 제목 강조
+                    st.caption(f"└ {desc}") # 상세 조건 표시
         else:
             st.info("남은 일정이 없습니다! 🎉")
 
@@ -267,10 +271,10 @@ elif page == "일정 관리":
     st.title("🗓️ 일정 관리")
     st.subheader("새 일정 추가")
     
-    # 1. 반복 유형 선택 (기간 추가됨)
+    # 1. 반복 유형
     type_opt = st.selectbox("반복 유형", ["매일", "매주 요일", "특정 날짜", "기간 (Start ~ End)"])
     
-    # 2. 유형에 따른 추가 옵션
+    # 2. 추가 옵션
     val = None
     if type_opt == "매주 요일":
         val = st.multiselect("요일 선택", ["월", "화", "수", "목", "금", "토", "일"])
@@ -293,7 +297,7 @@ elif page == "일정 관리":
     s_h = c_h.number_input("시", 0, 23, 9)
     s_m = c_m.number_input("분", 0, 59, 0)
     s_s = c_s.number_input("초", 0, 59, 0)
-    schedule_time_str = f"{s_h:02d}:{s_m:02d}:{s_s:02d}"
+    schedule_time_str = f"{s_h:02d}:{s_m:02d}:{s_s:02d}" # 무조건 00:00:00 형태로 만듦
 
     # 4. 추가 버튼
     if st.button("일정 추가하기", type="primary"):
@@ -320,12 +324,12 @@ elif page == "일정 관리":
     if data['schedules']:
         st.subheader("일정 목록")
         df_sc = pd.DataFrame(data['schedules'])
-        df_sc['time'] = df_sc['time'].apply(lambda x: x + ":00" if len(str(x)) == 5 else x)
         
-        # 목록에서 보여줄 때 리스트([]) 깨지지 않게 변환
+        # 목록 표시용 변환 함수
         def fmt_val(v):
             if isinstance(v, list):
-                if len(v) == 2 and v[0][0].isdigit(): # 날짜 두개면 기간으로 표시
+                # 기간인 경우
+                if len(v) == 2 and v[0][0].isdigit():
                     return f"{v[0]} ~ {v[1]}"
                 return ",".join(v)
             return v
