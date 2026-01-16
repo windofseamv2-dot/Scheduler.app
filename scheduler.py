@@ -5,7 +5,9 @@ import datetime
 import json
 import os
 
-# --- 1. 데이터 관리 ---
+# --- 1. 기본 설정 및 데이터 관리 ---
+st.set_page_config(page_title="나만의 스터디 플래너", layout="wide", page_icon="📝")
+
 DATA_FILE = "study_planner_data.json"
 
 def load_data():
@@ -22,21 +24,27 @@ data = load_data()
 
 # --- 한국 시간 함수 ---
 def get_korea_now():
+    # Streamlit Cloud 서버 시간(UTC)을 한국 시간(KST)으로 변환
     return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
 def get_korea_today():
     return get_korea_now().date()
 
-# --- 2. 일정 필터링 함수 ---
-def get_today_schedules(schedules):
-    today = get_korea_today()
-    weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
-    today_weekday = weekday_map[today.weekday()] 
-    today_str = today.strftime("%Y-%m-%d")
+# --- 2. 일정 필터링 함수 (시간 지난 것 제외 기능 추가) ---
+def get_upcoming_schedules(schedules):
+    now = get_korea_now()
+    today_date = now.date()
+    current_time_str = now.strftime("%H:%M:%S") # 현재 시간 문자열 (비교용)
     
-    todays_list = []
+    weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
+    today_weekday = weekday_map[today_date.weekday()] 
+    today_str = today_date.strftime("%Y-%m-%d")
+    
+    upcoming_list = []
+    
     for sc in schedules:
         is_today = False
+        # 1. 날짜/요일 체크
         if sc['type'] == '매일':
             is_today = True
         elif sc['type'] == '매주 요일':
@@ -47,16 +55,41 @@ def get_today_schedules(schedules):
         elif sc['type'] == '특정 날짜' and sc['value'] == today_str:
             is_today = True
             
-        if is_today:
-            # 시간 형식 통일 (HH:MM -> HH:MM:00)
-            if len(sc['time']) == 5: 
-                sc['time'] += ":00"
-            todays_list.append(sc)
-    
-    todays_list.sort(key=lambda x: x['time'])
-    return todays_list
+        # 2. 시간 포맷 통일 (HH:MM -> HH:MM:00)
+        if len(sc['time']) == 5: 
+            sc['time'] += ":00"
 
-# --- 3. 알림 기능 시계 ---
+        # 3. [수정됨] 시간이 안 지난 것만 담기
+        # (문자열끼리 비교 가능: "09:00:00" < "13:00:00")
+        if is_today and sc['time'] > current_time_str:
+            upcoming_list.append(sc)
+    
+    upcoming_list.sort(key=lambda x: x['time'])
+    return upcoming_list
+
+# 알림용 전체 일정 (지나간 것도 포함해서 알림 로직엔 넘겨야 함 - 페이지 리로드 없이 대기중일 수 있으므로)
+def get_today_all_schedules_for_alert(schedules):
+    today = get_korea_today()
+    weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
+    today_weekday = weekday_map[today.weekday()] 
+    today_str = today.strftime("%Y-%m-%d")
+    
+    alert_list = []
+    for sc in schedules:
+        is_today = False
+        if sc['type'] == '매일': is_today = True
+        elif sc['type'] == '매주 요일':
+            if isinstance(sc['value'], list) and today_weekday in sc['value']: is_today = True
+            elif isinstance(sc['value'], str) and sc['value'] == today_weekday: is_today = True
+        elif sc['type'] == '특정 날짜' and sc['value'] == today_str: is_today = True
+        
+        if len(sc['time']) == 5: sc['time'] += ":00"
+        
+        if is_today:
+            alert_list.append(sc)
+    return alert_list
+
+# --- 3. [핵심 수정] 알림 기능 시계 (JS 포맷 강제 통일) ---
 def show_realtime_clock_with_alert(today_schedules):
     schedules_json = json.dumps(today_schedules, ensure_ascii=False)
     
@@ -85,13 +118,22 @@ def show_realtime_clock_with_alert(today_schedules):
 
         function updateClock() {{
             var now = new Date();
-            var timeString = now.toLocaleTimeString('ko-KR', {{ hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }});
+            
+            // [수정] 24시간제 HH:MM:SS 포맷 직접 생성 (오류 방지)
+            var h = String(now.getHours()).padStart(2, '0');
+            var m = String(now.getMinutes()).padStart(2, '0');
+            var s = String(now.getSeconds()).padStart(2, '0');
+            var timeString = h + ":" + m + ":" + s; // 예: "14:05:03"
+            
+            // 화면 표시용 (한국어 날짜)
             var dateString = now.toLocaleDateString('ko-KR', {{ year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }});
             
             document.getElementById('clock').innerHTML = timeString;
             document.getElementById('date').innerHTML = dateString;
 
+            // 알림 체크
             schedules.forEach(function(item) {{
+                // 파이썬 데이터(item.time)와 JS시간(timeString)이 정확히 일치하면 알림
                 if (item.time === timeString && !alertedTimes.includes(timeString)) {{
                     alert("⏰ 시간 됐어요!\\n[" + item.title + "] 할 시간입니다!");
                     alertedTimes.push(timeString);
@@ -105,8 +147,6 @@ def show_realtime_clock_with_alert(today_schedules):
     components.html(clock_html, height=130)
 
 # --- 4. 메인 화면 ---
-st.set_page_config(page_title="나만의 스터디 플래너", layout="wide", page_icon="📝")
-
 st.sidebar.title("📚 메뉴")
 page = st.sidebar.radio("이동", ["대시보드 (Main)", "공부 기록하기", "일정 관리"])
 
@@ -114,15 +154,19 @@ korea_now = get_korea_now()
 korea_today_str = korea_now.strftime("%Y-%m-%d")
 
 if page == "대시보드 (Main)":
-    today_schedules = get_today_schedules(data['schedules'])
-    show_realtime_clock_with_alert(today_schedules)
+    # 알림용 리스트 (전체)
+    alert_schedules = get_today_all_schedules_for_alert(data['schedules'])
+    show_realtime_clock_with_alert(alert_schedules)
+    
+    # 화면 표시용 리스트 (지나간 것 제외)
+    upcoming_schedules = get_upcoming_schedules(data['schedules'])
     
     today_logs = [log for log in data['logs'] if log['date'] == korea_today_str]
     total_minutes = sum(log['duration'] for log in today_logs)
     
     c1, c2 = st.columns(2)
     c1.metric("⏱️ 오늘 공부량", f"{total_minutes} 분")
-    c2.metric("🔔 남은 일정", f"{len(today_schedules)} 개")
+    c2.metric("🔔 남은 일정", f"{len(upcoming_schedules)} 개")
     
     st.markdown("---")
     
@@ -130,16 +174,16 @@ if page == "대시보드 (Main)":
     weekday_korean = ["월", "화", "수", "목", "금", "토", "일"][korea_now.weekday()]
 
     with col_left:
-        st.subheader(f"📝 오늘의 일정 ({weekday_korean})")
-        if today_schedules:
-            for item in today_schedules:
+        st.subheader(f"📝 남은 일정 ({weekday_korean})")
+        if upcoming_schedules:
+            for item in upcoming_schedules:
                 with st.container(border=True):
                     val_disp = ",".join(item['value']) if isinstance(item['value'], list) else str(item['value'])
                     st.markdown(f"#### ⏰ {item['time']}") 
                     st.markdown(f"**{item['title']}**")
                     st.caption(f"조건: {item['type']} ({val_disp})")
         else:
-            st.info(f"오늘은 예정된 일정이 없습니다! ({weekday_korean}요일)")
+            st.info("남은 일정이 없습니다! 🎉")
 
     with col_right:
         st.subheader("🔥 최근 공부 기록")
@@ -158,16 +202,12 @@ elif page == "공부 기록하기":
     st.info(f"현재 한국 시간: {korea_now.strftime('%H시 %M분 %S초')}")
     
     with st.form("log_form"):
-        # [변경] 시/분/초 따로 입력받기 (에러 해결 & 초 단위 입력 가능)
         col_date, c_h, c_m, c_s = st.columns([2, 1, 1, 1])
         input_date = col_date.date_input("날짜", get_korea_today())
         
-        # 기본값은 현재 시간
         hh = c_h.number_input("시", 0, 23, korea_now.hour)
         mm = c_m.number_input("분", 0, 59, korea_now.minute)
         ss = c_s.number_input("초", 0, 59, korea_now.second)
-        
-        # 시간 문자열 조립
         time_str = f"{hh:02d}:{mm:02d}:{ss:02d}"
         
         c1, c2 = st.columns(2)
@@ -210,13 +250,11 @@ elif page == "일정 관리":
         st.subheader("새 일정 추가")
         title = st.text_input("내용 (예: 수학학원)")
 
-        # [변경] 시/분/초 따로 입력받기
         st.write("시간 설정")
         c_h, c_m, c_s = st.columns(3)
         s_h = c_h.number_input("시", 0, 23, 9)
         s_m = c_m.number_input("분", 0, 59, 0)
         s_s = c_s.number_input("초", 0, 59, 0)
-        
         schedule_time_str = f"{s_h:02d}:{s_m:02d}:{s_s:02d}"
         
         type_opt = st.selectbox("반복", ["매일", "매주 요일", "특정 날짜"])
@@ -248,9 +286,7 @@ elif page == "일정 관리":
     if data['schedules']:
         st.subheader("일정 목록")
         df_sc = pd.DataFrame(data['schedules'])
-        # 시간 형식 맞추기
         df_sc['time'] = df_sc['time'].apply(lambda x: x + ":00" if len(str(x)) == 5 else x)
-        
         df_sc['disp'] = df_sc['value'].apply(lambda x: ",".join(x) if isinstance(x, list) else x)
         df_sc['del'] = False
         
