@@ -24,17 +24,17 @@ data = load_data()
 
 # --- 한국 시간 함수 ---
 def get_korea_now():
-    # Streamlit Cloud 서버 시간(UTC)을 한국 시간(KST)으로 변환
     return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
 def get_korea_today():
     return get_korea_now().date()
 
-# --- 2. 일정 필터링 함수 (시간 지난 것 제외 기능 추가) ---
+# --- 2. 일정 필터링 함수 (시간 지난 것 제외) ---
 def get_upcoming_schedules(schedules):
     now = get_korea_now()
     today_date = now.date()
-    current_time_str = now.strftime("%H:%M:%S") # 현재 시간 문자열 (비교용)
+    # 현재 시간 (HH:MM:SS)
+    current_time_str = now.strftime("%H:%M:%S")
     
     weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
     today_weekday = weekday_map[today_date.weekday()] 
@@ -55,19 +55,18 @@ def get_upcoming_schedules(schedules):
         elif sc['type'] == '특정 날짜' and sc['value'] == today_str:
             is_today = True
             
-        # 2. 시간 포맷 통일 (HH:MM -> HH:MM:00)
+        # 2. 시간 포맷 통일
         if len(sc['time']) == 5: 
             sc['time'] += ":00"
 
-        # 3. [수정됨] 시간이 안 지난 것만 담기
-        # (문자열끼리 비교 가능: "09:00:00" < "13:00:00")
+        # 3. 시간이 안 지난 것만 담기
         if is_today and sc['time'] > current_time_str:
             upcoming_list.append(sc)
     
     upcoming_list.sort(key=lambda x: x['time'])
     return upcoming_list
 
-# 알림용 전체 일정 (지나간 것도 포함해서 알림 로직엔 넘겨야 함 - 페이지 리로드 없이 대기중일 수 있으므로)
+# 알림용 전체 일정 가져오기
 def get_today_all_schedules_for_alert(schedules):
     today = get_korea_today()
     weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
@@ -89,7 +88,7 @@ def get_today_all_schedules_for_alert(schedules):
             alert_list.append(sc)
     return alert_list
 
-# --- 3. [핵심 수정] 알림 기능 시계 (JS 포맷 강제 통일) ---
+# --- 3. 알림 기능 시계 ---
 def show_realtime_clock_with_alert(today_schedules):
     schedules_json = json.dumps(today_schedules, ensure_ascii=False)
     
@@ -118,22 +117,17 @@ def show_realtime_clock_with_alert(today_schedules):
 
         function updateClock() {{
             var now = new Date();
-            
-            // [수정] 24시간제 HH:MM:SS 포맷 직접 생성 (오류 방지)
             var h = String(now.getHours()).padStart(2, '0');
             var m = String(now.getMinutes()).padStart(2, '0');
             var s = String(now.getSeconds()).padStart(2, '0');
-            var timeString = h + ":" + m + ":" + s; // 예: "14:05:03"
+            var timeString = h + ":" + m + ":" + s;
             
-            // 화면 표시용 (한국어 날짜)
             var dateString = now.toLocaleDateString('ko-KR', {{ year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }});
             
             document.getElementById('clock').innerHTML = timeString;
             document.getElementById('date').innerHTML = dateString;
 
-            // 알림 체크
             schedules.forEach(function(item) {{
-                // 파이썬 데이터(item.time)와 JS시간(timeString)이 정확히 일치하면 알림
                 if (item.time === timeString && !alertedTimes.includes(timeString)) {{
                     alert("⏰ 시간 됐어요!\\n[" + item.title + "] 할 시간입니다!");
                     alertedTimes.push(timeString);
@@ -154,11 +148,11 @@ korea_now = get_korea_now()
 korea_today_str = korea_now.strftime("%Y-%m-%d")
 
 if page == "대시보드 (Main)":
-    # 알림용 리스트 (전체)
+    # 알림용 (전체)
     alert_schedules = get_today_all_schedules_for_alert(data['schedules'])
     show_realtime_clock_with_alert(alert_schedules)
     
-    # 화면 표시용 리스트 (지나간 것 제외)
+    # 화면용 (지나간 것 제외)
     upcoming_schedules = get_upcoming_schedules(data['schedules'])
     
     today_logs = [log for log in data['logs'] if log['date'] == korea_today_str]
@@ -245,42 +239,51 @@ elif page == "공부 기록하기":
 
 elif page == "일정 관리":
     st.title("🗓️ 일정 관리")
+    st.subheader("새 일정 추가")
     
-    with st.form("new_schedule"):
-        st.subheader("새 일정 추가")
-        title = st.text_input("내용 (예: 수학학원)")
+    # [변경됨] form을 제거하고 즉시 반응형으로 수정
+    # 1. 반복 유형 선택 (여기서 바꾸면 바로 아래 입력창이 바뀜)
+    type_opt = st.selectbox("반복 유형", ["매일", "매주 요일", "특정 날짜"])
+    
+    # 2. 유형에 따른 추가 옵션 표시
+    val = None
+    if type_opt == "매주 요일":
+        val = st.multiselect("요일 선택", ["월", "화", "수", "목", "금", "토", "일"])
+    elif type_opt == "특정 날짜":
+        d = st.date_input("날짜 선택")
+        val = d.strftime("%Y-%m-%d")
+        
+    # 3. 내용 및 시간 입력 (form 없음)
+    title = st.text_input("일정 내용 (예: 영어 학원)")
+    
+    st.write("시간 설정 (24시간제)")
+    c_h, c_m, c_s = st.columns(3)
+    s_h = c_h.number_input("시", 0, 23, 9)
+    s_m = c_m.number_input("분", 0, 59, 0)
+    s_s = c_s.number_input("초", 0, 59, 0)
+    schedule_time_str = f"{s_h:02d}:{s_m:02d}:{s_s:02d}"
 
-        st.write("시간 설정")
-        c_h, c_m, c_s = st.columns(3)
-        s_h = c_h.number_input("시", 0, 23, 9)
-        s_m = c_m.number_input("분", 0, 59, 0)
-        s_s = c_s.number_input("초", 0, 59, 0)
-        schedule_time_str = f"{s_h:02d}:{s_m:02d}:{s_s:02d}"
-        
-        type_opt = st.selectbox("반복", ["매일", "매주 요일", "특정 날짜"])
-        
-        val = None
-        if type_opt == "매주 요일":
-            val = st.multiselect("요일", ["월", "화", "수", "목", "금", "토", "일"])
-        elif type_opt == "특정 날짜":
-            d = st.date_input("날짜")
-            val = d.strftime("%Y-%m-%d")
-            
-        if st.form_submit_button("추가"):
-            if not title:
-                st.error("내용을 입력하세요")
-            else:
-                new_item = {
-                    "id": (max(x['id'] for x in data['schedules']) + 1) if data['schedules'] else 1,
-                    "title": title,
-                    "time": schedule_time_str, 
-                    "type": type_opt,
-                    "value": val
-                }
-                data['schedules'].append(new_item)
-                save_data(data)
-                st.success("추가됨")
-                st.rerun()
+    # 4. 추가 버튼 (form 바깥에 있음)
+    if st.button("일정 추가하기", type="primary"):
+        if not title:
+            st.error("⚠️ 일정 내용을 입력해주세요!")
+        elif type_opt == "매주 요일" and not val:
+            st.error("⚠️ 요일을 최소 하나 이상 선택해주세요!")
+        else:
+            new_item = {
+                "id": (max(x['id'] for x in data['schedules']) + 1) if data['schedules'] else 1,
+                "title": title,
+                "time": schedule_time_str, 
+                "type": type_opt,
+                "value": val
+            }
+            data['schedules'].append(new_item)
+            save_data(data)
+            st.success("✅ 일정이 추가되었습니다!")
+            # 1초 뒤에 자동으로 새로고침해서 입력창 비우기
+            import time
+            time.sleep(1)
+            st.rerun()
     
     st.divider()
     if data['schedules']:
