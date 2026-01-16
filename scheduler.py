@@ -20,16 +20,16 @@ def save_data(data):
 
 data = load_data()
 
-# --- [중요] 한국 시간 구하는 함수 (서버 시간 + 9시간) ---
+# --- [중요] 한국 시간 구하는 함수 ---
 def get_korea_now():
     return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
 def get_korea_today():
     return get_korea_now().date()
 
-# --- 2. 일정 필터링 함수 (한국 시간 기준 수정됨) ---
+# --- 2. 일정 필터링 함수 ---
 def get_today_schedules(schedules):
-    today = get_korea_today()  # [변경] 한국 날짜 사용
+    today = get_korea_today()
     weekday_map = ["월", "화", "수", "목", "금", "토", "일"]
     today_weekday = weekday_map[today.weekday()] 
     today_str = today.strftime("%Y-%m-%d")
@@ -94,29 +94,23 @@ st.set_page_config(page_title="나만의 스터디 플래너", layout="wide", pa
 st.sidebar.title("📚 메뉴")
 page = st.sidebar.radio("이동", ["대시보드 (Main)", "공부 기록하기", "일정 관리"])
 
-# 공통: 한국 시간 가져오기
 korea_now = get_korea_now()
 korea_today_str = korea_now.strftime("%Y-%m-%d")
 
 if page == "대시보드 (Main)":
-    # 상단 시계 표시
     show_realtime_clock()
     
-    # 데이터 계산
     today_logs = [log for log in data['logs'] if log['date'] == korea_today_str]
     total_minutes = sum(log['duration'] for log in today_logs)
     today_schedules = get_today_schedules(data['schedules'])
     
-    # 요약 지표 (Metrics)
     c1, c2 = st.columns(2)
     c1.metric("⏱️ 오늘 공부량", f"{total_minutes} 분")
     c2.metric("🔔 남은 일정", f"{len(today_schedules)} 개")
     
     st.markdown("---")
     
-    # 일정 & 기록 보여주기
     col_left, col_right = st.columns([1, 1])
-    
     weekday_korean = ["월", "화", "수", "목", "금", "토", "일"][korea_now.weekday()]
 
     with col_left:
@@ -134,7 +128,6 @@ if page == "대시보드 (Main)":
     with col_right:
         st.subheader("🔥 최근 공부 기록")
         if data['logs']:
-            # 날짜 내림차순 정렬
             df_logs = pd.DataFrame(data['logs']).sort_values(by=["date", "time"], ascending=False).head(5)
             st.dataframe(
                 df_logs[["date", "time", "subject", "duration", "note"]],
@@ -150,9 +143,9 @@ elif page == "공부 기록하기":
     
     with st.form("log_form"):
         col_d, col_t = st.columns(2)
-        # 기본값을 한국 시간으로 설정
         input_date = col_d.date_input("날짜", get_korea_today())
-        input_time = col_t.time_input("시간", korea_now.time())
+        # [변경] step=60 추가 (1분 단위)
+        input_time = col_t.time_input("시간", korea_now.time(), step=60)
         
         c1, c2 = st.columns(2)
         subject = c1.text_input("과목명")
@@ -166,7 +159,7 @@ elif page == "공부 기록하기":
                 "subject": subject,
                 "duration": duration,
                 "note": note,
-                "timestamp": str(korea_now) # 정렬용 타임스탬프
+                "timestamp": str(korea_now)
             }
             data['logs'].append(new_log)
             save_data(data)
@@ -182,7 +175,6 @@ elif page == "공부 기록하기":
         with st.expander("기록 삭제"):
             target = st.selectbox("삭제할 항목", df_all.index, format_func=lambda i: f"[{df_all.loc[i]['date']}] {df_all.loc[i]['subject']}")
             if st.button("삭제"):
-                # timestamp로 찾아서 삭제
                 tgt_ts = df_all.loc[target]['timestamp']
                 data['logs'] = [x for x in data['logs'] if x['timestamp'] != tgt_ts]
                 save_data(data)
@@ -194,7 +186,8 @@ elif page == "일정 관리":
     with st.form("new_schedule"):
         st.subheader("새 일정 추가")
         title = st.text_input("내용 (예: 수학학원)")
-        t_time = st.time_input("시간", datetime.time(9,0))
+        # [변경] step=60 추가 (1분 단위)
+        t_time = st.time_input("시간", datetime.time(9,0), step=60)
         type_opt = st.selectbox("반복", ["매일", "매주 요일", "특정 날짜"])
         
         val = None
