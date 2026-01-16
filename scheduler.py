@@ -20,14 +20,68 @@ def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-data = load_data()
-
 # --- 한국 시간 함수 ---
 def get_korea_now():
     return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
 def get_korea_today():
     return get_korea_now().date()
+
+# --- [NEW] 청소부 함수: 지난 일정 영구 삭제 ---
+def clean_expired_schedules(data):
+    now = get_korea_now()
+    today_str = now.strftime("%Y-%m-%d")
+    current_time_str = now.strftime("%H:%M:%S")
+    
+    new_schedules = []
+    is_changed = False
+    
+    for sc in data['schedules']:
+        # 시간 포맷 안전하게 통일 (HH:MM -> HH:MM:00)
+        try:
+            parts = sc['time'].split(':')
+            h, m, s = int(parts[0]), int(parts[1]), 0
+            if len(parts) == 3: s = int(parts[2])
+            sc['time'] = f"{h:02d}:{m:02d}:{s:02d}"
+        except:
+            pass # 포맷 에러나면 건드리지 않음
+
+        keep = True
+        
+        # 1. '특정 날짜': 날짜가 지났거나, (오늘인데 시간이 지났으면) 삭제
+        if sc['type'] == '특정 날짜':
+            if sc['value'] < today_str: # 날짜가 어제 이전임
+                keep = False
+            elif sc['value'] == today_str and sc['time'] < current_time_str: # 오늘인데 시간 지남
+                keep = False
+                
+        # 2. '기간': 종료일이 지났거나, (종료일이 오늘인데 시간이 지났으면) 삭제
+        elif sc['type'] == '기간 (Start ~ End)':
+            try:
+                end_date = sc['value'][1]
+                if end_date < today_str:
+                    keep = False
+                elif end_date == today_str and sc['time'] < current_time_str:
+                    keep = False
+            except:
+                keep = True # 데이터 꼬였으면 안전하게 보존
+
+        # 3. '매일', '매주 요일'은 반복이므로 삭제 안 함
+        
+        if keep:
+            new_schedules.append(sc)
+        else:
+            is_changed = True # 지워진 게 하나라도 있다!
+            
+    if is_changed:
+        data['schedules'] = new_schedules
+        save_data(data) # 파일에 영구 반영
+        
+    return data
+
+# 데이터 로드 후 바로 청소 시작
+data = load_data()
+data = clean_expired_schedules(data)
 
 # --- 2. 일정 처리 함수 ---
 def process_schedules(schedules):
@@ -41,7 +95,6 @@ def process_schedules(schedules):
     
     for sc in schedules:
         is_today = False
-        # 날짜/요일 체크
         if sc['type'] == '매일': is_today = True
         elif sc['type'] == '매주 요일':
             if isinstance(sc['value'], list) and today_weekday in sc['value']: is_today = True
@@ -54,26 +107,18 @@ def process_schedules(schedules):
                     e = datetime.datetime.strptime(sc['value'][1], "%Y-%m-%d").date()
                     if s <= today_date <= e: is_today = True
                 except: pass
-
-        # 시간 포맷 강제 통일 (HH:MM:SS)
-        try:
-            parts = sc['time'].split(':')
-            h, m, s = int(parts[0]), int(parts[1]), 0
-            if len(parts) == 3: s = int(parts[2])
-            sc['time'] = f"{h:02d}:{m:02d}:{s:02d}"
-        except: continue
-
+        
         if is_today:
             todays_list.append(sc)
             
     todays_list.sort(key=lambda x: x['time'])
     return todays_list
 
-# --- 3. [수정됨] 절대 안 씹히는 알림 시계 ---
+# --- 3. 알림 시계 ---
 def show_realtime_clock_with_alert(today_schedules):
     schedules_json = json.dumps(today_schedules, ensure_ascii=False)
     
-    # 디버그용 텍스트 (화면에 잘 불러와졌는지 확인용)
+    # 디버그용: 화면에 알림 대기중인 일정 표시
     debug_list = [f"{i['title']}({i['time']})" for i in today_schedules]
     debug_msg = ", ".join(debug_list) if debug_list else "없음"
 
@@ -95,9 +140,8 @@ def show_realtime_clock_with_alert(today_schedules):
     </div>
     <script>
         var schedules = {schedules_json};
-        var alertedIds = []; // 알림 울린 일정 기록
+        var alertedIds = []; 
 
-        // "HH:MM:SS"를 초(숫자)로 바꾸는 함수
         function toSeconds(tStr) {{
             var p = tStr.split(':');
             return parseInt(p[0])*3600 + parseInt(p[1])*60 + parseInt(p[2]);
@@ -105,29 +149,25 @@ def show_realtime_clock_with_alert(today_schedules):
 
         function updateClock() {{
             var now = new Date();
-            // 한국 시간 포맷팅
             var h = String(now.getHours()).padStart(2, '0');
             var m = String(now.getMinutes()).padStart(2, '0');
             var s = String(now.getSeconds()).padStart(2, '0');
             var timeString = h + ":" + m + ":" + s;
             
-            // 현재 시간을 '오늘 흐른 총 초(second)'로 변환
             var currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
             
             document.getElementById('clock').innerHTML = timeString;
             document.getElementById('date').innerHTML = now.toLocaleDateString('ko-KR', {{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }});
 
-            // 알림 체크 (범위 검사: 현재 시간이 일정 시간보다 0~3초 사이로 지났으면 울림)
             schedules.forEach(function(item) {{
                 var schedSeconds = toSeconds(item.time);
                 var diff = currentSeconds - schedSeconds;
 
-                // 차이가 0초~5초 사이면 무조건 울림 (렉 걸려도 커버 가능)
+                // 0~5초 차이면 알림 (지나갔어도 바로 울림)
                 if (diff >= 0 && diff <= 5) {{
-                    // 이미 울린 적 없으면
                     if (!alertedIds.includes(item.time + item.title)) {{
                         alert("⏰ [" + item.title + "] 할 시간입니다!\\n" + item.time);
-                        alertedIds.push(item.time + item.title); // 울림 처리
+                        alertedIds.push(item.time + item.title);
                     }}
                 }}
             }});
@@ -146,11 +186,11 @@ korea_now = get_korea_now()
 korea_today_str = korea_now.strftime("%Y-%m-%d")
 
 if page == "대시보드 (Main)":
-    # 1. 시계 및 알림 (모든 일정 포함)
+    # 1. 시계 표시 (알림 기능)
     all_schedules = process_schedules(data['schedules'])
     show_realtime_clock_with_alert(all_schedules)
     
-    # 2. 남은 일정 필터링
+    # 2. 화면 표시용 (이미 지난 건 숨기기)
     curr_time_str = korea_now.strftime("%H:%M:%S")
     upcoming = [s for s in all_schedules if s['time'] > curr_time_str]
     
@@ -171,29 +211,22 @@ if page == "대시보드 (Main)":
         st.subheader(f"📝 남은 일정 ({weekday_kor})")
         if upcoming:
             for item in upcoming:
-                # [디자인 개선] 일정 카드 상세 표시
                 with st.container(border=True):
-                    # 제목과 시간
                     st.markdown(f"### ⏰ {item['time']}")
                     st.markdown(f"**📌 {item['title']}**")
                     
-                    # 상세 정보 배지 만들기
                     t_type = item['type']
                     val = item['value']
                     info_text = ""
-                    
-                    if t_type == "매일":
-                        info_text = "🔄 매일 반복"
-                    elif t_type == "매주 요일":
+                    if t_type == "매일": info_text = "🔄 매일 반복"
+                    elif t_type == "매주 요일": 
                         days = ",".join(val) if isinstance(val, list) else str(val)
                         info_text = f"📅 매주 {days}요일"
-                    elif t_type == "특정 날짜":
-                        info_text = f"📆 날짜: {val}"
+                    elif t_type == "특정 날짜": info_text = f"📆 날짜: {val}"
                     elif t_type == "기간 (Start ~ End)":
                         if isinstance(val, list) and len(val) == 2:
                             info_text = f"🗓️ 기간: {val[0]} ~ {val[1]}"
-                    
-                    st.info(info_text) # 파란색 박스로 예쁘게 표시
+                    st.info(info_text)
         else:
             st.info("남은 일정이 없습니다! 🎉")
 
@@ -201,11 +234,7 @@ if page == "대시보드 (Main)":
         st.subheader("🔥 최근 공부 기록")
         if data['logs']:
             df_logs = pd.DataFrame(data['logs']).sort_values(by=["date", "time"], ascending=False).head(5)
-            st.dataframe(
-                df_logs[["date", "time", "subject", "duration", "note"]],
-                column_config={"date":"날짜", "time":"시간", "subject":"과목", "duration":"분", "note":"내용"},
-                use_container_width=True, hide_index=True
-            )
+            st.dataframe(df_logs[["date", "time", "subject", "duration", "note"]], use_container_width=True, hide_index=True)
         else:
             st.warning("기록이 없습니다.")
 
@@ -253,7 +282,6 @@ elif page == "일정 관리":
     st.title("🗓️ 일정 관리")
     st.subheader("일정 추가")
     
-    # 직관적인 입력 UI
     type_opt = st.selectbox("반복 유형", ["매일", "매주 요일", "특정 날짜", "기간 (Start ~ End)"])
     val = None
     
