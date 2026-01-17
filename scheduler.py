@@ -27,7 +27,7 @@ def get_korea_now():
 def get_korea_today():
     return get_korea_now().date()
 
-# --- [NEW] 청소부 함수: 지난 일정 영구 삭제 ---
+# --- 청소부 함수 (지난 일정 삭제) ---
 def clean_expired_schedules(data):
     now = get_korea_now()
     today_str = now.strftime("%Y-%m-%d")
@@ -37,49 +37,31 @@ def clean_expired_schedules(data):
     is_changed = False
     
     for sc in data['schedules']:
-        # 시간 포맷 안전하게 통일 (HH:MM -> HH:MM:00)
         try:
             parts = sc['time'].split(':')
             h, m, s = int(parts[0]), int(parts[1]), 0
             if len(parts) == 3: s = int(parts[2])
             sc['time'] = f"{h:02d}:{m:02d}:{s:02d}"
-        except:
-            pass # 포맷 에러나면 건드리지 않음
+        except: pass
 
         keep = True
-        
-        # 1. '특정 날짜': 날짜가 지났거나, (오늘인데 시간이 지났으면) 삭제
         if sc['type'] == '특정 날짜':
-            if sc['value'] < today_str: # 날짜가 어제 이전임
-                keep = False
-            elif sc['value'] == today_str and sc['time'] < current_time_str: # 오늘인데 시간 지남
-                keep = False
-                
-        # 2. '기간': 종료일이 지났거나, (종료일이 오늘인데 시간이 지났으면) 삭제
+            if sc['value'] < today_str: keep = False
+            elif sc['value'] == today_str and sc['time'] < current_time_str: keep = False
         elif sc['type'] == '기간 (Start ~ End)':
             try:
-                end_date = sc['value'][1]
-                if end_date < today_str:
-                    keep = False
-                elif end_date == today_str and sc['time'] < current_time_str:
-                    keep = False
-            except:
-                keep = True # 데이터 꼬였으면 안전하게 보존
+                if sc['value'][1] < today_str: keep = False
+                elif sc['value'][1] == today_str and sc['time'] < current_time_str: keep = False
+            except: keep = True
 
-        # 3. '매일', '매주 요일'은 반복이므로 삭제 안 함
-        
-        if keep:
-            new_schedules.append(sc)
-        else:
-            is_changed = True # 지워진 게 하나라도 있다!
+        if keep: new_schedules.append(sc)
+        else: is_changed = True
             
     if is_changed:
         data['schedules'] = new_schedules
-        save_data(data) # 파일에 영구 반영
-        
+        save_data(data)
     return data
 
-# 데이터 로드 후 바로 청소 시작
 data = load_data()
 data = clean_expired_schedules(data)
 
@@ -108,8 +90,15 @@ def process_schedules(schedules):
                     if s <= today_date <= e: is_today = True
                 except: pass
         
-        if is_today:
-            todays_list.append(sc)
+        # 시간 포맷 재확인
+        try:
+            parts = sc['time'].split(':')
+            h, m, s = int(parts[0]), int(parts[1]), 0
+            if len(parts) == 3: s = int(parts[2])
+            sc['time'] = f"{h:02d}:{m:02d}:{s:02d}"
+        except: continue
+
+        if is_today: todays_list.append(sc)
             
     todays_list.sort(key=lambda x: x['time'])
     return todays_list
@@ -118,8 +107,17 @@ def process_schedules(schedules):
 def show_realtime_clock_with_alert(today_schedules):
     schedules_json = json.dumps(today_schedules, ensure_ascii=False)
     
-    # 디버그용: 화면에 알림 대기중인 일정 표시
-    debug_list = [f"{i['title']}({i['time']})" for i in today_schedules]
+    # 디버그용: 화면에 12시간제로 변환해서 보여줌 (가독성 UP)
+    debug_list = []
+    for i in today_schedules:
+        try:
+            h = int(i['time'].split(':')[0])
+            ampm = "오전" if h < 12 else "오후"
+            h_12 = h if h <= 12 else h - 12
+            if h == 0: h_12 = 12
+            debug_list.append(f"{i['title']}({ampm} {h_12}시)")
+        except: pass
+        
     debug_msg = ", ".join(debug_list) if debug_list else "없음"
 
     clock_html = f"""
@@ -162,8 +160,6 @@ def show_realtime_clock_with_alert(today_schedules):
             schedules.forEach(function(item) {{
                 var schedSeconds = toSeconds(item.time);
                 var diff = currentSeconds - schedSeconds;
-
-                // 0~5초 차이면 알림 (지나갔어도 바로 울림)
                 if (diff >= 0 && diff <= 5) {{
                     if (!alertedIds.includes(item.time + item.title)) {{
                         alert("⏰ [" + item.title + "] 할 시간입니다!\\n" + item.time);
@@ -186,15 +182,12 @@ korea_now = get_korea_now()
 korea_today_str = korea_now.strftime("%Y-%m-%d")
 
 if page == "대시보드 (Main)":
-    # 1. 시계 표시 (알림 기능)
     all_schedules = process_schedules(data['schedules'])
     show_realtime_clock_with_alert(all_schedules)
     
-    # 2. 화면 표시용 (이미 지난 건 숨기기)
     curr_time_str = korea_now.strftime("%H:%M:%S")
     upcoming = [s for s in all_schedules if s['time'] > curr_time_str]
     
-    # 통계
     today_logs = [log for log in data['logs'] if log['date'] == korea_today_str]
     total_minutes = sum(log['duration'] for log in today_logs)
     
@@ -212,7 +205,17 @@ if page == "대시보드 (Main)":
         if upcoming:
             for item in upcoming:
                 with st.container(border=True):
-                    st.markdown(f"### ⏰ {item['time']}")
+                    # 12시간제로 보기 편하게 변환해서 표시
+                    try:
+                        ih = int(item['time'].split(':')[0])
+                        im = item['time'].split(':')[1]
+                        ampm_str = "오전" if ih < 12 else "오후"
+                        ih_12 = ih if ih <= 12 else ih - 12
+                        if ih == 0: ih_12 = 12
+                        time_disp = f"{ampm_str} {ih_12}:{im}"
+                    except: time_disp = item['time']
+
+                    st.markdown(f"### ⏰ {time_disp}")
                     st.markdown(f"**📌 {item['title']}**")
                     
                     t_type = item['type']
@@ -243,11 +246,13 @@ elif page == "공부 기록하기":
     st.info(f"현재: {korea_now.strftime('%H:%M:%S')}")
     
     with st.form("log"):
-        c_d, c_h, c_m, c_s = st.columns([2, 1, 1, 1])
+        c_d, c_ampm, c_h, c_m = st.columns([2, 1, 1, 1])
         in_date = c_d.date_input("날짜", get_korea_today())
-        hh = c_h.number_input("시", 0, 23, korea_now.hour)
-        mm = c_m.number_input("분", 0, 59, korea_now.minute)
-        ss = c_s.number_input("초", 0, 59, korea_now.second)
+        
+        # [NEW] 오전/오후 입력 방식
+        ampm = c_ampm.selectbox("오전/오후", ["오전", "오후"])
+        hh_12 = c_h.number_input("시 (1~12)", 1, 12, 12)
+        mm = c_m.number_input("분", 0, 59, 0)
         
         c1, c2 = st.columns(2)
         subj = c1.text_input("과목")
@@ -255,9 +260,14 @@ elif page == "공부 기록하기":
         note = st.text_area("메모")
         
         if st.form_submit_button("저장"):
+            # 24시간제로 변환
+            hh_24 = hh_12
+            if ampm == "오후" and hh_12 != 12: hh_24 += 12
+            if ampm == "오전" and hh_12 == 12: hh_24 = 0
+            
             data['logs'].append({
                 "date": in_date.strftime("%Y-%m-%d"),
-                "time": f"{hh:02d}:{mm:02d}:{ss:02d}",
+                "time": f"{hh_24:02d}:{mm:02d}:00",
                 "subject": subj, "duration": dur, "note": note,
                 "timestamp": str(korea_now)
             })
@@ -284,11 +294,8 @@ elif page == "일정 관리":
     
     type_opt = st.selectbox("반복 유형", ["매일", "매주 요일", "특정 날짜", "기간 (Start ~ End)"])
     val = None
-    
-    if type_opt == "매주 요일":
-        val = st.multiselect("요일", ["월","화","수","목","금","토","일"])
-    elif type_opt == "특정 날짜":
-        val = st.date_input("날짜").strftime("%Y-%m-%d")
+    if type_opt == "매주 요일": val = st.multiselect("요일", ["월","화","수","목","금","토","일"])
+    elif type_opt == "특정 날짜": val = st.date_input("날짜").strftime("%Y-%m-%d")
     elif type_opt == "기간 (Start ~ End)":
         c1, c2 = st.columns(2)
         d1 = c1.date_input("시작일")
@@ -296,20 +303,27 @@ elif page == "일정 관리":
         val = [d1.strftime("%Y-%m-%d"), d2.strftime("%Y-%m-%d")]
     
     title = st.text_input("내용")
+    
+    # [NEW] 시간 입력 UI 개선 (오전/오후 선택)
     st.write("시간 설정")
-    c_h, c_m, c_s = st.columns(3)
-    s_h = c_h.number_input("시", 0, 23, 9)
-    s_m = c_m.number_input("분", 0, 59, 0)
-    s_s = c_s.number_input("초", 0, 59, 0)
+    c_ampm, c_h, c_m = st.columns([1, 1, 1])
+    ampm = c_ampm.selectbox("오전/오후", ["오전", "오후"], key="sc_ampm")
+    s_h = c_h.number_input("시 (1~12)", 1, 12, 1, key="sc_h")
+    s_m = c_m.number_input("분", 0, 59, 0, key="sc_m")
     
     if st.button("추가", type="primary"):
         if not title: st.error("내용 입력 필요")
         elif type_opt == "매주 요일" and not val: st.error("요일 선택 필요")
         else:
+            # 24시간제로 자동 변환 저장
+            h_24 = s_h
+            if ampm == "오후" and s_h != 12: h_24 += 12
+            if ampm == "오전" and s_h == 12: h_24 = 0
+            
             data['schedules'].append({
                 "id": (max([x['id'] for x in data['schedules']] or [0])) + 1,
                 "title": title,
-                "time": f"{s_h:02d}:{s_m:02d}:{s_s:02d}",
+                "time": f"{h_24:02d}:{s_m:02d}:00", # 초는 00으로 고정
                 "type": type_opt, "value": val
             })
             save_data(data)
@@ -324,15 +338,38 @@ elif page == "일정 관리":
         df = pd.DataFrame(data['schedules'])
         df['time'] = df['time'].apply(lambda x: x + ":00" if len(x)==5 else x)
         
-        def fmt(v):
+        # 목록에서도 오전/오후로 보여주기
+        def fmt_time(t):
+            try:
+                h = int(t.split(':')[0])
+                m = t.split(':')[1]
+                ap = "오전" if h < 12 else "오후"
+                h12 = h if h <= 12 else h - 12
+                if h == 0: h12 = 12
+                return f"{ap} {h12}:{m}"
+            except: return t
+            
+        def fmt_val(v):
             if isinstance(v, list):
                 if len(v)==2 and v[0][0].isdigit(): return f"{v[0]}~{v[1]}"
                 return ",".join(v)
             return v
-        df['disp'] = df['value'].apply(fmt)
+            
+        df['disp_time'] = df['time'].apply(fmt_time) # 보여주기용 시간
+        df['disp_val'] = df['value'].apply(fmt_val)
         df['del'] = False
         
-        ed = st.data_editor(df, column_config={"del": st.column_config.CheckboxColumn("삭제"), "title":"내용", "time":"시간", "disp":"상세", "value":None, "id":None}, hide_index=True, use_container_width=True)
+        ed = st.data_editor(
+            df, 
+            column_config={
+                "del": st.column_config.CheckboxColumn("삭제"), 
+                "title":"내용", 
+                "disp_time":"시간", # 원본 time 대신 disp_time 보여줌
+                "disp_val":"상세", 
+                "value":None, "id":None, "time":None, "type":None # 숨김
+            }, 
+            hide_index=True, use_container_width=True
+        )
         if st.button("선택 삭제"):
             ids = ed[ed['del']]['id'].tolist()
             data['schedules'] = [x for x in data['schedules'] if x['id'] not in ids]
